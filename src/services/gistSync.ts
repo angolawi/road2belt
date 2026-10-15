@@ -53,7 +53,7 @@ export async function pullFromGist(
   token: string,
   gistId: string
 ): Promise<CloudBackupPayload> {
-  const response = await fetch(`https://api.github.com/gists/${gistId}?t=${Date.now()}`, {
+  const response = await fetch(`https://api.github.com/gists/${gistId}`, {
     method: 'GET',
     headers: getHeaders(token),
     cache: 'no-store'

@@ -51,15 +51,17 @@ export function useCloudSync({
     }
   });
 
-  const isConfigured = Boolean(config.token && config.gistId);
+  const { token, gistId, autoSync } = config;
+  const isConfigured = Boolean(token && gistId);
 
   const [syncStatus, setSyncStatus] = useState<SyncStatus>(() =>
-    config.token && config.gistId ? 'idle' : 'unconfigured'
+    token && gistId ? 'idle' : 'unconfigured'
   );
   const [syncError, setSyncError] = useState<string | null>(null);
 
   const lastKnownRemoteUpdatedAtRef = useRef<string | null>(null);
   const isSyncingRef = useRef<boolean>(false);
+  const lastPullTimestampRef = useRef<number>(0);
 
   // Keep latest data in a ref so async callbacks always read fresh state
   const latestDataRef = useRef({
@@ -82,13 +84,16 @@ export function useCloudSync({
     };
   }, [user, bjjSessions, conditioningSessions, nutritionLogs, readinessLogs, localUpdatedAt]);
 
-  const saveConfig = useCallback((next: GistSyncConfig) => {
-    setConfig(next);
-    try {
-      window.localStorage.setItem(SYNC_CONFIG_STORAGE_KEY, JSON.stringify(next));
-    } catch (e) {
-      console.error('Erro ao salvar configuração de sync:', e);
-    }
+  const updateConfig = useCallback((updater: (prev: GistSyncConfig) => GistSyncConfig) => {
+    setConfig((prev) => {
+      const next = updater(prev);
+      try {
+        window.localStorage.setItem(SYNC_CONFIG_STORAGE_KEY, JSON.stringify(next));
+      } catch (e) {
+        console.error('Erro ao salvar configuração de sync:', e);
+      }
+      return next;
+    });
   }, []);
 
   const buildCurrentPayload = useCallback((overrideUpdatedAt?: string): CloudBackupPayload => {
@@ -107,8 +112,8 @@ export function useCloudSync({
   // Connect using Token (and optional Gist ID)
   const connectWithToken = useCallback(
     async (rawToken: string, customGistId?: string): Promise<boolean> => {
-      const token = rawToken.trim();
-      if (!token) {
+      const cleanToken = rawToken.trim();
+      if (!cleanToken) {
         setSyncError('Informe um Personal Access Token válido.');
         return false;
       }
@@ -127,12 +132,12 @@ export function useCloudSync({
         let wasCreated = false;
 
         if (targetGistId) {
-          remotePayload = await pullFromGist(token, targetGistId);
+          remotePayload = await pullFromGist(cleanToken, targetGistId);
         } else {
           const initialPayload = buildCurrentPayload(
             latestDataRef.current.localUpdatedAt || new Date().toISOString()
           );
-          const result = await findOrCreateSyncGist(token, initialPayload);
+          const result = await findOrCreateSyncGist(cleanToken, initialPayload);
           targetGistId = result.gistId;
           remotePayload = result.remotePayload;
           wasCreated = result.created;
@@ -140,14 +145,12 @@ export function useCloudSync({
 
         if (!wasCreated && remotePayload) {
           const remoteTime = new Date(remotePayload.updatedAt).getTime() || 0;
-          // If this is a fresh device (localTime === 0) or remote is newer/equal, apply remote data
           if (localTime === 0 || remoteTime >= localTime) {
             lastKnownRemoteUpdatedAtRef.current = remotePayload.updatedAt;
             onApplyRemoteData(remotePayload);
           } else {
-            // Local has newer edits than remote; push local to Gist
             const payloadToPush = buildCurrentPayload();
-            await pushToGist(token, targetGistId, payloadToPush);
+            await pushToGist(cleanToken, targetGistId, payloadToPush);
             lastKnownRemoteUpdatedAtRef.current = payloadToPush.updatedAt;
           }
         } else if (wasCreated && remotePayload) {
@@ -155,12 +158,13 @@ export function useCloudSync({
         }
 
         const nowIso = new Date().toISOString();
-        saveConfig({
-          token,
+        lastPullTimestampRef.current = Date.now();
+        updateConfig(() => ({
+          token: cleanToken,
           gistId: targetGistId,
           autoSync: true,
           lastSyncedAt: nowIso
-        });
+        }));
         setSyncStatus('synced');
         return true;
       } catch (err) {
@@ -172,12 +176,13 @@ export function useCloudSync({
         isSyncingRef.current = false;
       }
     },
-    [buildCurrentPayload, onApplyRemoteData, saveConfig]
+    [buildCurrentPayload, onApplyRemoteData, updateConfig]
   );
 
   // Smart Sync (Pull if remote is newer, Push if local is newer)
+  // Note: depends only on primitive token & gistId, NOT lastSyncedAt!
   const syncNow = useCallback(async () => {
-    if (!config.token || !config.gistId || isSyncingRef.current) return;
+    if (!token || !gistId || isSyncingRef.current) return;
     if (!navigator.onLine) {
       setSyncStatus('offline');
       return;
@@ -188,7 +193,7 @@ export function useCloudSync({
     setSyncError(null);
 
     try {
-      const remotePayload = await pullFromGist(config.token, config.gistId);
+      const remotePayload = await pullFromGist(token, gistId);
       const remoteTime = new Date(remotePayload.updatedAt).getTime() || 0;
       const localTime = latestDataRef.current.localUpdatedAt
         ? new Date(latestDataRef.current.localUpdatedAt).getTime()
@@ -199,16 +204,17 @@ export function useCloudSync({
         onApplyRemoteData(remotePayload);
       } else if (localTime > remoteTime) {
         const payloadToPush = buildCurrentPayload();
-        await pushToGist(config.token, config.gistId, payloadToPush);
+        await pushToGist(token, gistId, payloadToPush);
         lastKnownRemoteUpdatedAtRef.current = payloadToPush.updatedAt;
       } else {
         lastKnownRemoteUpdatedAtRef.current = remotePayload.updatedAt;
       }
 
-      saveConfig({
-        ...config,
+      lastPullTimestampRef.current = Date.now();
+      updateConfig((prev) => ({
+        ...prev,
         lastSyncedAt: new Date().toISOString()
-      });
+      }));
       setSyncStatus('synced');
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Erro na sincronização.';
@@ -217,23 +223,24 @@ export function useCloudSync({
     } finally {
       isSyncingRef.current = false;
     }
-  }, [buildCurrentPayload, config, onApplyRemoteData, saveConfig]);
+  }, [token, gistId, buildCurrentPayload, onApplyRemoteData, updateConfig]);
 
   // Force Pull from Cloud
   const forcePull = useCallback(async () => {
-    if (!config.token || !config.gistId || isSyncingRef.current) return;
+    if (!token || !gistId || isSyncingRef.current) return;
     isSyncingRef.current = true;
     setSyncStatus('syncing');
     setSyncError(null);
 
     try {
-      const remotePayload = await pullFromGist(config.token, config.gistId);
+      const remotePayload = await pullFromGist(token, gistId);
       lastKnownRemoteUpdatedAtRef.current = remotePayload.updatedAt;
       onApplyRemoteData(remotePayload);
-      saveConfig({
-        ...config,
+      lastPullTimestampRef.current = Date.now();
+      updateConfig((prev) => ({
+        ...prev,
         lastSyncedAt: new Date().toISOString()
-      });
+      }));
       setSyncStatus('synced');
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Erro ao baixar da nuvem.';
@@ -242,11 +249,11 @@ export function useCloudSync({
     } finally {
       isSyncingRef.current = false;
     }
-  }, [config, onApplyRemoteData, saveConfig]);
+  }, [token, gistId, onApplyRemoteData, updateConfig]);
 
   // Force Push to Cloud
   const forcePush = useCallback(async () => {
-    if (!config.token || !config.gistId || isSyncingRef.current) return;
+    if (!token || !gistId || isSyncingRef.current) return;
     isSyncingRef.current = true;
     setSyncStatus('syncing');
     setSyncError(null);
@@ -254,13 +261,14 @@ export function useCloudSync({
     try {
       const nowIso = new Date().toISOString();
       const payload = buildCurrentPayload(nowIso);
-      await pushToGist(config.token, config.gistId, payload);
+      await pushToGist(token, gistId, payload);
       lastKnownRemoteUpdatedAtRef.current = nowIso;
       onApplyRemoteData(payload);
-      saveConfig({
-        ...config,
+      lastPullTimestampRef.current = Date.now();
+      updateConfig((prev) => ({
+        ...prev,
         lastSyncedAt: nowIso
-      });
+      }));
       setSyncStatus('synced');
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Erro ao enviar para a nuvem.';
@@ -269,7 +277,7 @@ export function useCloudSync({
     } finally {
       isSyncingRef.current = false;
     }
-  }, [buildCurrentPayload, config, onApplyRemoteData, saveConfig]);
+  }, [token, gistId, buildCurrentPayload, onApplyRemoteData, updateConfig]);
 
   const disconnect = useCallback(() => {
     try {
@@ -303,14 +311,17 @@ export function useCloudSync({
     }
   }, [connectWithToken]);
 
-  // 2. Auto-sync on initial mount, tab visibility change, and network recovery
+  // 2. Auto-sync once on initial mount, on tab visibility change (with 30s cooldown), and network recovery
   useEffect(() => {
-    if (!isConfigured || !config.autoSync) return;
+    if (!isConfigured || !autoSync) return;
 
     syncNow();
 
     const handleVisibilityChange = () => {
-      if (document.visibilityState === 'visible') {
+      if (
+        document.visibilityState === 'visible' &&
+        Date.now() - lastPullTimestampRef.current > 30_000
+      ) {
         syncNow();
       }
     };
@@ -332,15 +343,15 @@ export function useCloudSync({
       window.removeEventListener('online', handleOnline);
       window.removeEventListener('offline', handleOffline);
     };
-  }, [isConfigured, config.autoSync, syncNow]);
+  }, [isConfigured, autoSync, syncNow]);
 
-  // 3. Debounced Auto-Push when localUpdatedAt changes from a user edit
+  // 3. Debounced Auto-Push ONLY when localUpdatedAt changes from a user edit
   useEffect(() => {
-    if (!isConfigured || !config.autoSync || !localUpdatedAt) return;
+    if (!isConfigured || !autoSync || !localUpdatedAt) return;
     if (localUpdatedAt === lastKnownRemoteUpdatedAtRef.current) return;
 
     const timer = window.setTimeout(async () => {
-      if (!config.token || !config.gistId || isSyncingRef.current) return;
+      if (!token || !gistId || isSyncingRef.current) return;
       if (!navigator.onLine) {
         setSyncStatus('offline');
         return;
@@ -352,12 +363,12 @@ export function useCloudSync({
 
       try {
         const payload = buildCurrentPayload(localUpdatedAt);
-        await pushToGist(config.token, config.gistId, payload);
+        await pushToGist(token, gistId, payload);
         lastKnownRemoteUpdatedAtRef.current = localUpdatedAt;
-        saveConfig({
-          ...config,
+        updateConfig((prev) => ({
+          ...prev,
           lastSyncedAt: new Date().toISOString()
-        });
+        }));
         setSyncStatus('synced');
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Erro ao salvar na nuvem.';
@@ -369,18 +380,18 @@ export function useCloudSync({
     }, 1500);
 
     return () => window.clearTimeout(timer);
-  }, [localUpdatedAt, isConfigured, config, buildCurrentPayload, saveConfig]);
+  }, [localUpdatedAt, isConfigured, autoSync, token, gistId, buildCurrentPayload, updateConfig]);
 
   const getPairingUrl = useCallback(() => {
-    if (!config.token) return '';
+    if (!token) return '';
     const baseUrl = `${window.location.origin}${window.location.pathname}`;
     const params = new URLSearchParams();
-    params.set('gist_token', config.token);
-    if (config.gistId) {
-      params.set('gist_id', config.gistId);
+    params.set('gist_token', token);
+    if (gistId) {
+      params.set('gist_id', gistId);
     }
     return `${baseUrl}#${params.toString()}`;
-  }, [config.token, config.gistId]);
+  }, [token, gistId]);
 
   return {
     config,
