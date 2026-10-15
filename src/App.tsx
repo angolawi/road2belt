@@ -1,6 +1,8 @@
-import React, { useState } from 'react';
+import React, { useState, useCallback } from 'react';
 import { useLocalStorage } from './hooks/useLocalStorage';
 import { getTodayString, useDailySchedule } from './hooks/useDailySchedule';
+import { useCloudSync } from './hooks/useCloudSync';
+import { CloudBackupPayload, LAST_UPDATED_STORAGE_KEY } from './services/gistSync';
 import {
   INITIAL_USER_PROFILE,
   INITIAL_BJJ_SESSIONS,
@@ -41,6 +43,10 @@ export function App() {
     'bjj_readiness_logs',
     INITIAL_READINESS_LOGS
   );
+  const [localUpdatedAt, setLocalUpdatedAt] = useLocalStorage<string | null>(
+    LAST_UPDATED_STORAGE_KEY,
+    null
+  );
 
   const [selectedDate, setSelectedDate] = useState<string>(getTodayString());
   const [activeTab, setActiveTab] = useState<TabType>('today');
@@ -51,6 +57,50 @@ export function App() {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isBackupOpen, setIsBackupOpen] = useState(false);
 
+  const markModified = useCallback(() => {
+    setLocalUpdatedAt(new Date().toISOString());
+  }, [setLocalUpdatedAt]);
+
+  const handleApplyRemoteData = useCallback(
+    (payload: CloudBackupPayload) => {
+      setUser(payload.user);
+      setBjjSessions(payload.bjjSessions);
+      setConditioningSessions(payload.conditioningSessions);
+      setNutritionLogs(payload.nutritionLogs);
+      setReadinessLogs(payload.readinessLogs);
+      setLocalUpdatedAt(payload.updatedAt);
+    },
+    [
+      setUser,
+      setBjjSessions,
+      setConditioningSessions,
+      setNutritionLogs,
+      setReadinessLogs,
+      setLocalUpdatedAt
+    ]
+  );
+
+  const {
+    config: syncConfig,
+    isConfigured: isSyncConfigured,
+    syncStatus,
+    syncError,
+    connectWithToken,
+    syncNow,
+    forcePull,
+    forcePush,
+    disconnect: disconnectSync,
+    getPairingUrl
+  } = useCloudSync({
+    user,
+    bjjSessions,
+    conditioningSessions,
+    nutritionLogs,
+    readinessLogs,
+    localUpdatedAt,
+    onApplyRemoteData: handleApplyRemoteData
+  });
+
   const schedule = useDailySchedule(selectedDate, user.scheduleConfig);
 
   // Current date entities
@@ -60,6 +110,11 @@ export function App() {
   const currentReadinessLog = readinessLogs.find((s) => s.date === selectedDate);
 
   // Handlers
+  const handleSaveUser = (updatedUser: UserProfile) => {
+    setUser(updatedUser);
+    markModified();
+  };
+
   const handleSaveBJJSession = (session: BJJSession) => {
     setBjjSessions((prev) => {
       const idx = prev.findIndex((s) => s.id === session.id || (s.date === session.date && s.id.startsWith('bjj-')));
@@ -70,10 +125,12 @@ export function App() {
       }
       return [session, ...prev];
     });
+    markModified();
   };
 
   const handleDeleteBJJSession = (id: string) => {
     setBjjSessions((prev) => prev.filter((s) => s.id !== id));
+    markModified();
   };
 
   const handleSaveConditioningSession = (session: ConditioningSession) => {
@@ -86,6 +143,7 @@ export function App() {
       }
       return [session, ...prev];
     });
+    markModified();
   };
 
   const handleSaveNutritionLog = (log: DailyNutrition) => {
@@ -98,6 +156,7 @@ export function App() {
       }
       return [log, ...prev];
     });
+    markModified();
   };
 
   const handleSaveReadinessLog = (readiness: ReadinessCheck) => {
@@ -110,6 +169,7 @@ export function App() {
       }
       return [readiness, ...prev];
     });
+    markModified();
   };
 
   const handleImportAll = (data: {
@@ -124,6 +184,7 @@ export function App() {
     setConditioningSessions(data.conditioningSessions);
     setNutritionLogs(data.nutritionLogs);
     setReadinessLogs(data.readinessLogs);
+    markModified();
   };
 
   const handleResetData = () => {
@@ -132,6 +193,7 @@ export function App() {
     setConditioningSessions(INITIAL_CONDITIONING_SESSIONS);
     setNutritionLogs(INITIAL_NUTRITION_LOGS);
     setReadinessLogs(INITIAL_READINESS_LOGS);
+    markModified();
   };
 
   // Nutrition completion %
@@ -152,6 +214,7 @@ export function App() {
         onSelectDate={setSelectedDate}
         onOpenSettings={() => setIsSettingsOpen(true)}
         onOpenBackup={() => setIsBackupOpen(true)}
+        syncStatus={syncStatus}
       />
 
       <main className="flex-1 max-w-lg w-full mx-auto px-3.5 pt-4">
@@ -245,7 +308,7 @@ export function App() {
         isOpen={isSettingsOpen}
         onClose={() => setIsSettingsOpen(false)}
         user={user}
-        onSaveUser={setUser}
+        onSaveUser={handleSaveUser}
       />
 
       <BackupModal
@@ -258,6 +321,16 @@ export function App() {
         readinessLogs={readinessLogs}
         onImportAll={handleImportAll}
         onResetData={handleResetData}
+        syncConfig={syncConfig}
+        isSyncConfigured={isSyncConfigured}
+        syncStatus={syncStatus}
+        syncError={syncError}
+        onConnectToken={connectWithToken}
+        onSyncNow={syncNow}
+        onForcePull={forcePull}
+        onForcePush={forcePush}
+        onDisconnectSync={disconnectSync}
+        getPairingUrl={getPairingUrl}
       />
     </div>
   );

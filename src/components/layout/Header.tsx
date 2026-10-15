@@ -1,6 +1,7 @@
 import React from 'react';
-import { Calendar, ChevronLeft, ChevronRight, Award, ShieldCheck, Download, Settings } from 'lucide-react';
+import { Calendar, ChevronLeft, ChevronRight, Award, Cloud, CloudOff, RefreshCw, Settings } from 'lucide-react';
 import { UserProfile } from '../../types';
+import { SyncStatus } from '../../services/gistSync';
 import { formatDisplayDate, getTodayString, getWeekDays } from '../../hooks/useDailySchedule';
 import { BJJBeltBadge } from '../ui/BJJBeltBadge';
 
@@ -10,6 +11,7 @@ interface HeaderProps {
   onSelectDate: (date: string) => void;
   onOpenSettings: () => void;
   onOpenBackup: () => void;
+  syncStatus: SyncStatus;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -17,7 +19,8 @@ export const Header: React.FC<HeaderProps> = ({
   selectedDate,
   onSelectDate,
   onOpenSettings,
-  onOpenBackup
+  onOpenBackup,
+  syncStatus
 }) => {
   const todayStr = getTodayString();
   const isToday = selectedDate === todayStr;
@@ -77,13 +80,56 @@ export const Header: React.FC<HeaderProps> = ({
           </div>
         </div>
 
-        <div className="flex items-center space-x-1">
+        <div className="flex items-center space-x-1.5">
           <button
             onClick={onOpenBackup}
-            title="Backup e Dados"
-            className="p-2 rounded-lg text-gray-400 hover:text-white hover:bg-tatame-card transition-colors"
+            title={
+              syncStatus === 'synced'
+                ? 'Nuvem Sincronizada (Clique para gerenciar)'
+                : syncStatus === 'syncing'
+                ? 'Sincronizando com a nuvem...'
+                : syncStatus === 'error'
+                ? 'Erro na sincronização (Clique para verificar)'
+                : syncStatus === 'offline'
+                ? 'Offline (Dados salvos localmente)'
+                : 'Configurar Sincronização na Nuvem e Backup'
+            }
+            className={`relative flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold border transition-colors ${
+              syncStatus === 'synced'
+                ? 'bg-emerald-950/60 border-emerald-700/60 text-emerald-300 hover:bg-emerald-900/60'
+                : syncStatus === 'syncing'
+                ? 'bg-purple-950/60 border-purple-700/60 text-purple-300'
+                : syncStatus === 'error'
+                ? 'bg-red-950/60 border-red-700/60 text-red-300 hover:bg-red-900/60'
+                : syncStatus === 'offline'
+                ? 'bg-amber-950/60 border-amber-700/60 text-amber-300 hover:bg-amber-900/60'
+                : 'bg-tatame-card/80 border-tatame-border text-gray-400 hover:text-white hover:bg-tatame-card'
+            }`}
           >
-            <Download className="w-4 h-4" />
+            {syncStatus === 'syncing' ? (
+              <RefreshCw className="w-3.5 h-3.5 animate-spin text-purple-400" />
+            ) : syncStatus === 'offline' || syncStatus === 'error' ? (
+              <CloudOff className="w-3.5 h-3.5" />
+            ) : (
+              <Cloud className="w-3.5 h-3.5" />
+            )}
+            <span className="hidden sm:inline text-[11px]">
+              {syncStatus === 'synced'
+                ? 'Sync'
+                : syncStatus === 'syncing'
+                ? 'Sync...'
+                : syncStatus === 'error'
+                ? 'Erro'
+                : syncStatus === 'offline'
+                ? 'Offline'
+                : 'Nuvem'}
+            </span>
+            {syncStatus === 'synced' && (
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+            )}
+            {syncStatus === 'error' && (
+              <span className="w-1.5 h-1.5 rounded-full bg-red-400 animate-pulse" />
+            )}
           </button>
           <button
             onClick={onOpenSettings}
