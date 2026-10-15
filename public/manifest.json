@@ -1,0 +1,18 @@
+{
+  "name": "Road2Belt: BJJ Tracker",
+  "short_name": "Road2Belt",
+  "description": "Plataforma de acompanhamento diário rumo à próxima faixa: Tatame, Físico e Nutrição",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#0c0e14",
+  "theme_color": "#581c87",
+  "orientation": "portrait",
+  "icons": [
+    {
+      "src": "./favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
